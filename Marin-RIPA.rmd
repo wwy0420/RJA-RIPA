@@ -1,0 +1,533 @@
+---
+title: "Marin County RIPA Stop Analysis"
+author: "Weiyang Wang"
+date: "2026-05-29"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+---
+
+```{r message=FALSE, warning=FALSE}
+{knitr::opts_chunk$set(echo = TRUE)} 
+library(readxl) 
+library(knitr)
+library(tidyverse) 
+RIPA_MARIN_2024 = read_excel("Final files/RIPA Stop Data_Marin 2024_final.xlsx") #Change your path here
+```
+
+# Racial Justice Act and RIPA
+
+## Introduction
+
+Under Penal Code § 745, The state shall not seek or obtain a criminal conviction or seek, obtain, or impose a sentence on the basis of race, ethnicity, or national origin. A violation is established if the defendant proves, by a preponderance of the evidence, any of the following:
+
+(3) The defendant was charged or convicted of a more serious offense than defendants of other races, ethnicities, or national origins who have engaged in similar conduct and are similarly situated, and the evidence establishes that the prosecution more frequently sought or obtained convictions for more serious offenses against people who share the defendant’s race, ethnicity, or national origin in the county where the convictions were sought or obtained.
+
+Law enforcement interactions are intricately tied to RJA claims. Police reports, arrest charges, and evidentiary citations form the foundation of prosecutorial charging decisions. If law enforcement disproportionately arrests or cites specific racial/ethnic groups, it directly feeds into the systemic disparities challenged under an (a)(3) claim.
+
+A defendant makes a prima facie showing by producing facts that, if true, establish a substantial likelihood of racial discrimination. Once that threshold is met, the court must hold an evidentiary hearing. Statistical evidence and aggregate data are expressly authorized forms of proof.
+
+To make a prima facie showing with the available RIPA data, we need to analyze how (1) race, ethnicities, or national origins, (3) resulted in prosecution sought or obtained convictions for more serious offense (2) on a similar conduct and are similarly situated.
+
+This report will:
+
+(1) Use race and language proficiency as nexuses for national origins; and
+
+(2) Condition on the type of stop and the reason for the stop to ensure that the defendant’s conduct leading to the stop is comparable to that of others. Geographic comparability will be addressed by conditioning on the law enforcement agency; and
+
+(3) Focus on the results of the stop, specifically citations and arrests that initiate criminal proceedings. These outcomes are relevant because they create the opportunity for prosecution, whereas non-enforcement outcomes, such as verbal warnings, do not.
+
+With only RIPA data available, focusing on law enforcement actions that could initiate criminal proceedings sheds light on potential RJA violations, as these actions form the critical gateway through which disparities in enforcement may translate into prosecutorial decisions and, ultimately, charging and conviction outcomes.
+
+\
+
+# Data sets
+
+RIPA stop data are from <https://openjustice.doj.ca.gov/data>
+
+## Description of Each Column as Basis for RJA(a)(3) Motion
+
+Description of each field of data can be found here: <https://data-openjustice.doj.ca.gov/sites/default/files/dataset/2025-12/ripa-stop-dataset-readme-2024.pdf>
+
+Some of the important ones are listed here:
+
+- `AGENCY_NAME` is the name of the law enforcement agency, which includes
+
+```{r}
+agency_name_list = unique(RIPA_MARIN_2024$AGENCY_NAME)
+agency_name_list
+```
+
+- `TIME_OF_STOP` is the time of stop, in 24 hour display HH:MM:SS
+
+- `STOP_DURATION` is the duration of stop, in minutes
+
+- `RAE_FULL` is the Perceived Race or Ethnicity of the Person stopped, identified as
+  - 1: Asian or `RAE_ASIAN`
+  - 2: Black/African American or `RAE_BLACK_AFRICAN_AMERICAN`
+  - 3: Hispanic/Latine(x) or `RAE_HISPANIC_LATINEX`
+  - 4: Middle Eastern/ South Asian or `RAE_MIDDLE_EASTERN_SOUTH_ASIAN`
+  - 5: Native American or `RAE_NATIVE_AMERICAN`
+  - 6: Pacific Islander or `RAE_PACIFIC_ISLANDER`
+  - 7: White or `RAE_WHITE`
+  - 8: Multiracial or `RAE_MULTIRACIAL`
+
+- `G_FULL` is the Perceived gender of person stopped, identified as
+  - 1: Cisgender Man/Boy or `G_CISGENDER_MAN`
+  - 2: Cisgender Woman/Girl or `G_CISGENDER_WOMAN`
+  - 3: Transgender Man/Boy or `G_TRANSGENDER_MAN`
+  - 4: Transgender Woman/Girl or `G_TRANSGENDER_WOMAN`
+  - 5: Nonbinary Person or `G_NONBINARY_PERSON`
+
+- `AGE` is the Perceived age of person stopped, in numeric, which can be further categorized into `AGE_GROUP`:
+  - 1: 1-9 years
+  - 2: 10-14 years
+  - 3: 15-17 years
+  - 4: 18-24 years
+  - 5: 25-34 years
+  - 6: 35-44 years
+  - 7: 45-54 years
+  - 8: 55-64 years
+  - 9: 65 years and older
+
+- `LIMITED_ENGLISH_FLUENCY` is the Person's English fluency, with 1 being limited or no fluency.
+
+- `PERSON_UNHOUSED` is the The stopped person perceived to be unhoused, with 1 being yes.
+
+### Demographic Reporting Method
+
+Demographic information pertaining to individual identity is based on officer perception rather than self-identification, and includes race/ethnicity, gender, age, sexual orientation, English fluency, disability status, and housing status.
+
+## Type of Stop and Reason of Stop as a Showing of "Similarly Situated"
+
+For the purposes of establishing RJA (a)(3) violation, the following variable will be taken into consideration:
+
+- `TOS_VEHICULAR` as Type of Stop: Vehicular, with a value of 1 being yes.
+- `TOS_BICYCLE` as Type of Stop: Bicycle, with a value of 1 being yes.
+- `TOS_PEDESTRIAN` as Type of Stop: Pedestrian (all other stops, e.g. passengers on bus or train, skateboarders, etc.,) with a value of 1 being yes.
+
+Welfare Check and Call for Services are excluded from consideration, as the general public are not subject to RJA, and law enforcement agency was the responder to those inquires.
+
+```{r}
+RIPA_MARIN_2024 = RIPA_MARIN_2024|>
+  filter(TOS_VEHICULAR==1 | TOS_BICYCLE==1 | TOS_PEDESTRIAN==1)
+```
+
+The relevant reason for stop (`REASON_FOR_STOP`) are divided into the following categories:
+
+- 1: Traffic Violation
+- 2: Reasonable suspicion the person was engaged in criminal activity
+- 3: Parole/probation/PRCS/mandatory supervision
+- 9: Probable cause to arrest or search
+
+```{r}
+rfs_list = tibble(
+  c(1, 2, 3, 9),        #You can add more here, just follow the format. Add a number here, and the description below
+  c(
+    "1. Traffic Violation",
+    "2. Reasonable suspicion the person was engaged in criminal activity",
+    "3. Parole/probation/PRCS/mandatory supervision",
+    "9. Probable cause to arrest or search"
+    )
+)
+```
+
+Other stop-reason categories, such as student-related stops and consensual searches, are omitted because they are less relevant to establishing a prima facie violation under Penal Code § 745(a)(3). Likewise, more detailed classifications of reasonable suspicion and probable cause are not analyzed at this stage.
+
+## Outcome of the Stop
+
+RJA (a)(3) focuses on whether the prosecution "more frequently sought or obtained convictions for more serious offenses." Criminal proceedings arising from a stop typically begin with either a citation or an arrest. Accordingly, for purposes of analyzing potential disparities using RIPA data, this report focuses on stop outcomes that may initiate or expose an individual to criminal proceedings.
+
+### Arrest
+
+- `ROS_CUSTODIAL_WITHOUT_WARRANT`: Result of stop: custodial arrest without warrant
+- `ROS_CUSTODIAL_WARRANT`: Result of stop: custodial pursuant to outstanding warrant
+  - This report will omit custodial pursuant to outstanding warrant, as this is race neutral.
+
+### Citation
+
+- `ROS_CITATION`: Result of stop: citation for infraction
+  - This report will omit citation for infraction, as this is usually traffic tickets
+- `ROS_IN_FIELD_CITE_RELEASE`: Result of stop: in field cite and release
+
+### Search (could include more depends on probative value)
+
+- `NFA_SEARCH_PERSON`: Non-force action: Search of person was conducted
+- `NFA_SEARCH_PROPERTY`: Non-force action: Search of property was conducted
+
+### Use of Force (could include more depends on probative value)
+
+- `OFA_HANDCUFFED`: Force action: Handcuffed or flex cuffed
+- `OFA_PHYSICAL_COMPLIANCE`Force action: Physical compliance tactics and techniques
+- `OFA_FIREARM_POINT`: Force action: Firearm pointed at person
+- `OFA_FIREARM_DISCHARGE`: Force action: Firearm discharged
+
+### No action
+
+- `ROS_NO_ACTION`: Result of stop: no action
+
+## Limitations on Data
+
+A relatively small amount of data with errors that should have been identified and corrected reached completed status. These known errors are listed below. Each count reflects the number of records, across all agencies that submitted 2024 data, containing the respective error.
+
+Specific error to Marin County are not identified. Some worth noting error and ways to address this minors are listed below:
+
+- School-Related Reporting Issues
+  - **27 cases**: Person identified as a K–12 student, but stop not marked as occurring on school grounds.
+  - **59 cases**: Stop marked as occurring on K–12 grounds, but school name missing.
+  - **114 cases**: Stop on K–12 grounds, but invalid school code provided.
+  - **2 cases**: Education Code stop reason selected, but no discipline code provided.
+  - **19 cases**: Non-student associated with a student-related stop reason.
+  - **1 case**: Written statement obtained, but stopped person was not a student.
+- Stop Reason and Offense Code Inconsistencies
+  - **18 cases**: Traffic violation selected, but traffic violation type missing.
+  - **34 cases**: Traffic violation selected, but CJIS offense code missing.
+  - **15 cases**: Traffic violation selected, but reasonable suspicion fields completed instead.
+  - **35 cases**: Reasonable suspicion selected, but supporting subcategories missing.
+  - **3 cases**: Probable cause offense code entered when stop reason was not probable cause.
+  - **27 cases**: Reasonable suspicion offense code entered when stop reason was not reasonable suspicion.
+  - **8 cases**: Traffic violation offense code entered when stop reason was not traffic violation.
+- Search-Related Issues
+  - **106 cases**: Search conducted, but basis for search not documented.
+  - **50 cases**: Search basis documented, but no search indicated.
+  - **34 cases**: Consensual encounter resulting in search selected, but no search action recorded.
+  - **5 cases**: Search based on consent, but consent action not documented.
+  - **293 cases**: Consent to search given, but consent type not specified.
+  - **1 case**: Vehicle inventory search basis selected, but no property search recorded.
+- Officer Action Data Missing
+  - **677 cases**: Missing non-force action information.
+    - This report will omit entry with missing non-force action information, when appropriate.
+  - **1,279 cases**: Missing force action information.
+    - This report will omit entry with missing force action, when appropriate.
+- Contraband and Evidence Issues
+  - **1 case**: Contraband/evidence marked as not discovered, but a contraband/evidence subtype was selected.
+- Property Seizure Issues
+  - **267 cases**: Property seized, but no basis for seizure documented.
+  - **31 cases**: Seizure based on contraband, but no contraband discovered.
+  - **33 cases**: Seizure based on evidence, but no evidence discovered.
+  - **284 cases**: Property seized, but property type not documented.
+  - **18 cases**: No property seized, but seizure basis entered.
+  - **25 cases**: No property seized, but property type entered.
+- Stop Outcome Issues
+  - **300 cases**: Missing stop result/outcome information.
+- Vehicle Stop Issues
+  - **341 cases**: Passenger identification/run recorded, but stop was not classified as a vehicle stop.
+
+\
+
+# Marin County Wide Data
+
+## Race and Ethnicities
+
+**Methodology**: This analysis uses 2024 California Racial and Identity Profiling Act (RIPA) data from Marin County to examine whether law enforcement outcomes vary across racial and ethnic groups among individuals stopped for similar reasons. To promote comparability, the analysis is conducted separately for each of the following stop-reason categories (`REASON_FOR_STOP`):
+
+- 1: Traffic Violation
+- 2: Reasonable suspicion the person was engaged in criminal activity
+- 3: Parole/probation/PRCS/mandatory supervision
+- 9: Probable cause to arrest or search
+
+For each stop-reason category, race and ethnicity are identified using the `RAE_FULL` variable and recoded into the following groups: Asian, Black, Hispanic, Middle Eastern/South Asian, Native American, Pacific Islander, White, and Multiracial. Records with missing race or ethnicity information are excluded from the analysis.
+
+Each stop is converted into a series of binary indicators representing key enforcement outcomes. 
+- Arrests are defined as custodial arrests without a warrant (`ROS_CUSTODIAL_WITHOUT_WARRANT == 1`).
+- Citations are defined as in-field cite-and-release dispositions (`ROS_IN_FIELD_CITE_RELEASE == 1`). 
+- Searches are defined as any search of a person or property (`NFA_SEARCH_PERSON == 1` or `NFA_SEARCH_PROPERTY == 1`). 
+- Use of force is defined as any instance of handcuffing, physical compliance techniques, firearm pointing, or firearm discharge (`OFA_HANDCUFFED`, `OFA_PHYSICAL_COMPLIANCE`, `OFA_FIREARM_POINT`, or `OFA_FIREARM_DISCHARGE`). 
+- Stops resulting in no enforcement action are identified by `ROS_NO_ACTION == 1`.
+
+Within each stop-reason category, the data are grouped by race and ethnicity. For each group, the analysis calculates the total number of stops, the total number of arrests, citations, searches, uses of force, and no-action outcomes, as well as the corresponding rates (means of binary indicators) for each outcome. Rates are calculated as the proportion of stops within a racial or ethnic group that resulted in the specified outcome.
+
+To reduce the influence of small sample sizes and unstable estimates, racial and ethnic groups with fewer than ten observations within a stop-reason category are excluded from the summary. Comparative tables are produced only when at least two racial or ethnic groups meet this threshold. The resulting summaries provide descriptive measures of enforcement outcomes across racial and ethnic groups for individuals stopped under comparable circumstances.
+
+```{r, results = 'asis'}
+for (i in 1:dim(rfs_list)[1]) {
+  rfs = as.numeric(rfs_list[i,1])
+  
+  cat(paste0("\n\n#### ", rfs_list[i,2], "\n\n"))
+  
+  race_summary <- RIPA_MARIN_2024 |>
+    filter(REASON_FOR_STOP == rfs) |>
+    mutate(
+      race = case_when(
+        RAE_FULL == 1 ~ "Asian",
+        RAE_FULL == 2 ~ "Black",
+        RAE_FULL == 3 ~ "Hispanic",
+        RAE_FULL == 4 ~ "MiddleEastern_SouthAsian",
+        RAE_FULL == 5 ~ "NativeAmerican",
+        RAE_FULL == 6 ~ "PacificIslander",
+        RAE_FULL == 7 ~ "White",
+        RAE_FULL == 8 ~ "Multiracial",
+        TRUE ~ NA_character_
+        ),
+      result_arrest = if_else(ROS_CUSTODIAL_WITHOUT_WARRANT == 1, 1, 0),
+      result_citation = if_else(ROS_IN_FIELD_CITE_RELEASE == 1, 1, 0),
+      searched = if_else(NFA_SEARCH_PERSON == 1 | NFA_SEARCH_PROPERTY == 1, 1, 0),
+      force_used = if_else(
+        OFA_HANDCUFFED == 1 | OFA_PHYSICAL_COMPLIANCE == 1 | OFA_FIREARM_POINT == 1 | 
+        OFA_FIREARM_DISCHARGE == 1, 1, 0),
+      no_action = if_else(ROS_NO_ACTION == 1, 1, 0)
+      )|>
+    filter(!is.na(race))|>
+    group_by(race) |>
+    summarise(
+      n = n(),
+      total_arrest = sum(result_arrest, na.rm = TRUE),
+      arrest_rate = mean(result_arrest, na.rm = TRUE),
+      total_citation = sum(result_citation, na.rm = TRUE),
+      citation_rate = mean(result_citation, na.rm = TRUE),
+      total_search = sum(searched, na.rm = TRUE),
+      search_rate = mean(searched, na.rm = TRUE),
+      total_force = sum(force_used, na.rm = TRUE),
+      force_rate = mean(force_used, na.rm = TRUE),
+      total_no_action = sum(no_action, na.rm = TRUE),
+      no_action_rate = mean(no_action, na.rm = TRUE),
+      .groups = "drop"
+      )|>
+    filter(n>=10)
+
+  if (nrow(race_summary) > 1) {
+    print(kable(race_summary))
+    } else{
+    print("Less than one sample has a size greater than 10, not signifiant enough to compare")
+  }  
+  cat("\n\n")
+}
+```
+
+## National Origin (using language proficiency as nexuses)
+
+**Methodology**: This analysis uses 2024 California Racial and Identity Profiling Act (RIPA) data from Marin County to examine whether law enforcement outcomes vary based on English language proficiency among individuals stopped for similar reasons. To promote comparability, the analysis is conducted separately for each of the following stop-reason categories (`REASON_FOR_STOP`):
+
+- 1: Traffic Violation
+- 2: Reasonable suspicion the person was engaged in criminal activity
+- 3: Parole/probation/PRCS/mandatory supervision
+- 9: Probable cause to arrest or search
+
+English language proficiency is operationalized using the LIMITED_ENGLISH_FLUENCY variable, recoded into two categories: Limited or no English fluency and Fluent in English. Observations with missing language information are excluded from the analysis.
+
+Each stop is converted into a series of binary indicators representing key enforcement outcomes. 
+- Arrests are defined as custodial arrests without a warrant (`ROS_CUSTODIAL_WITHOUT_WARRANT == 1`).
+- Citations are defined as in-field cite-and-release dispositions (`ROS_IN_FIELD_CITE_RELEASE == 1`). 
+- Searches are defined as any search of a person or property (`NFA_SEARCH_PERSON == 1` or `NFA_SEARCH_PROPERTY == 1`). 
+- Use of force is defined as any instance of handcuffing, physical compliance techniques, firearm pointing, or firearm discharge (`OFA_HANDCUFFED`, `OFA_PHYSICAL_COMPLIANCE`, `OFA_FIREARM_POINT`, or `OFA_FIREARM_DISCHARGE`). 
+- Stops resulting in no enforcement action are identified by `ROS_NO_ACTION == 1`.
+
+For each stop-reason category, stops are grouped by English proficiency. The analysis calculates the total number of stops, counts of each enforcement outcome, and corresponding rates (means of binary indicators) for each language group.
+
+To maintain statistical stability, language groups with fewer than 10 observations within a stop-reason category are excluded from the summary. Comparative tables are produced only when at least two groups meet this threshold. The resulting summaries provide descriptive measures of enforcement outcomes for individuals with differing English proficiency under comparable stop circumstances, allowing identification of potential disparities in law enforcement actions.
+
+```{r, results = 'asis'}
+for (i in 1:dim(rfs_list)[1]) {
+  rfs = as.numeric(rfs_list[i,1])
+  
+  cat(paste0("\n\n#### ", rfs_list[i,2], "\n\n"))
+  
+  language_summary <- RIPA_MARIN_2024 |>
+    filter(REASON_FOR_STOP == rfs) |>
+    mutate(
+      language = case_when(
+        LIMITED_ENGLISH_FLUENCY == 1 ~ "Limited or no English fluency",
+        LIMITED_ENGLISH_FLUENCY == 0 ~ "Fluent in English",
+        TRUE ~ NA_character_
+        ),
+      result_arrest = if_else(ROS_CUSTODIAL_WITHOUT_WARRANT == 1, 1, 0),
+      result_citation = if_else(ROS_IN_FIELD_CITE_RELEASE == 1, 1, 0),
+      searched = if_else(NFA_SEARCH_PERSON == 1 | NFA_SEARCH_PROPERTY == 1, 1, 0),
+      force_used = if_else(
+        OFA_HANDCUFFED == 1 | OFA_PHYSICAL_COMPLIANCE == 1 | OFA_FIREARM_POINT == 1 | 
+        OFA_FIREARM_DISCHARGE == 1, 1, 0),
+      no_action = if_else(ROS_NO_ACTION == 1, 1, 0)
+      ) |>
+    filter(!is.na(language)) |>
+    group_by(language) |>
+    summarise(
+      n = n(),
+      total_arrest = sum(result_arrest, na.rm = TRUE),
+      arrest_rate = mean(result_arrest, na.rm = TRUE),
+      total_citation = sum(result_citation, na.rm = TRUE),
+      citation_rate = mean(result_citation, na.rm = TRUE),
+      total_search = sum(searched, na.rm = TRUE),
+      search_rate = mean(searched, na.rm = TRUE),
+      total_force = sum(force_used, na.rm = TRUE),
+      force_rate = mean(force_used, na.rm = TRUE),
+      total_no_action = sum(no_action, na.rm = TRUE),
+      no_action_rate = mean(no_action, na.rm = TRUE),
+      .groups = "drop"
+      ) |>
+    filter(n >= 10)
+
+  if (nrow(language_summary) > 1) {
+    print(kable(language_summary))
+    } else{
+    print("Less than one sample has a size greater than 10, not signifiant enough to compare")
+  }  
+  cat("\n\n")
+}
+```
+
+\
+
+# Law Enforcement Specific Data
+
+## Race and Ethinicities
+
+**Methodology**: This analysis uses 2024 California Racial and Identity Profiling Act (RIPA) data from Marin County to examine potential disparities in law enforcement outcomes across racial and ethnic groups. The analysis is conducted hierarchically, first by agency (`AGENCY_NAME`) and then by stop reason (`REASON_FOR_STOP`), to ensure comparisons are made among stops conducted by the same department and under similar circumstances. The stop-reason categories included in this analysis are:
+
+- 1: Traffic Violation
+- 2: Reasonable suspicion the person was engaged in criminal activity
+- 3: Parole/probation/PRCS/mandatory supervision
+- 9: Probable cause to arrest or search
+
+For each stop-reason category, race and ethnicity are identified using the `RAE_FULL` variable and recoded into the following groups: Asian, Black, Hispanic, Middle Eastern/South Asian, Native American, Pacific Islander, White, and Multiracial. Records with missing race or ethnicity information are excluded from the analysis.
+
+Each stop is converted into a series of binary indicators representing key enforcement outcomes. 
+- Arrests are defined as custodial arrests without a warrant (`ROS_CUSTODIAL_WITHOUT_WARRANT == 1`).
+- Citations are defined as in-field cite-and-release dispositions (`ROS_IN_FIELD_CITE_RELEASE == 1`). 
+- Searches are defined as any search of a person or property (`NFA_SEARCH_PERSON == 1` or `NFA_SEARCH_PROPERTY == 1`). 
+- Use of force is defined as any instance of handcuffing, physical compliance techniques, firearm pointing, or firearm discharge (`OFA_HANDCUFFED`, `OFA_PHYSICAL_COMPLIANCE`, `OFA_FIREARM_POINT`, or `OFA_FIREARM_DISCHARGE`). 
+- Stops resulting in no enforcement action are identified by `ROS_NO_ACTION == 1`.
+
+Within each stop-reason category, the data are grouped by race and ethnicity. For each group, the analysis calculates the total number of stops, the total number of arrests, citations, searches, uses of force, and no-action outcomes, as well as the corresponding rates (means of binary indicators) for each outcome. Rates are calculated as the proportion of stops within a racial or ethnic group that resulted in the specified outcome.
+
+To reduce the influence of small sample sizes and unstable estimates, racial and ethnic groups with fewer than ten observations within a stop-reason category are excluded from the summary. Comparative tables are produced only when at least two racial or ethnic groups meet this threshold. The resulting summaries provide descriptive measures of enforcement outcomes across racial and ethnic groups for individuals stopped under comparable circumstances.
+
+```{r, results = 'asis'}
+
+for (i in 1:length(agency_name_list)) {
+  agency_name = agency_name_list[i]
+  
+  cat(paste0("\n\n### ", agency_name, "\n\n"))
+  
+  for (j in 1:dim(rfs_list)[1]) {
+    rfs = as.numeric(rfs_list[j,1])
+    
+    cat(paste0("\n\n#### ", rfs_list[j,2], "\n\n"))
+    
+    race_summary <- RIPA_MARIN_2024 |>
+      filter(REASON_FOR_STOP == rfs & AGENCY_NAME == agency_name) |>
+      mutate(
+        race = case_when(
+          RAE_FULL == 1 ~ "Asian",
+          RAE_FULL == 2 ~ "Black",
+          RAE_FULL == 3 ~ "Hispanic",
+          RAE_FULL == 4 ~ "MiddleEastern_SouthAsian",
+          RAE_FULL == 5 ~ "NativeAmerican",
+          RAE_FULL == 6 ~ "PacificIslander",
+          RAE_FULL == 7 ~ "White",
+          RAE_FULL == 8 ~ "Multiracial",
+          TRUE ~ NA_character_
+          ),
+        result_arrest = if_else(ROS_CUSTODIAL_WITHOUT_WARRANT == 1, 1, 0),
+        result_citation = if_else(ROS_IN_FIELD_CITE_RELEASE == 1, 1, 0),
+        searched = if_else(NFA_SEARCH_PERSON == 1 | NFA_SEARCH_PROPERTY == 1, 1, 0),
+        force_used = if_else(
+          OFA_HANDCUFFED == 1 | OFA_PHYSICAL_COMPLIANCE == 1 | OFA_FIREARM_POINT == 1 | 
+          OFA_FIREARM_DISCHARGE == 1, 1, 0),
+        no_action = if_else(ROS_NO_ACTION == 1, 1, 0)
+        )|>
+      filter(!is.na(race))|>
+      group_by(race) |>
+      summarise(
+        n = n(),
+        total_arrest = sum(result_arrest, na.rm = TRUE),
+        arrest_rate = mean(result_arrest, na.rm = TRUE),
+        total_citation = sum(result_citation, na.rm = TRUE),
+        citation_rate = mean(result_citation, na.rm = TRUE),
+        total_search = sum(searched, na.rm = TRUE),
+        search_rate = mean(searched, na.rm = TRUE),
+        total_force = sum(force_used, na.rm = TRUE),
+        force_rate = mean(force_used, na.rm = TRUE),
+        total_no_action = sum(no_action, na.rm = TRUE),
+        no_action_rate = mean(no_action, na.rm = TRUE),
+        .groups = "drop"
+        )|>
+      filter(n>=10)
+
+    if (nrow(race_summary) > 1) {
+      print(kable(race_summary))
+      } else{
+      print("Less than one sample has a size greater than 10, not signifiant enough to compare")
+    }  
+    cat("\n\n")
+  }
+}
+```
+
+## National Origin (using language proficiency as nexuses)
+
+**Methodology**: This analysis uses 2024 California Racial and Identity Profiling Act (RIPA) data from Marin County to examine whether law enforcement outcomes vary by English proficiency across different law enforcement agencies. The analysis is conducted hierarchically, first by agency (`AGENCY_NAME`) and then by stop reason (`REASON_FOR_STOP`), to ensure comparability among encounters handled by the same department and for similar reasons. The stop-reason categories analyzed include:
+
+- 1: Traffic Violation
+- 2: Reasonable suspicion the person was engaged in criminal activity
+- 3: Parole/probation/PRCS/mandatory supervision
+- 9: Probable cause to arrest or search
+
+English language proficiency is operationalized using the LIMITED_ENGLISH_FLUENCY variable, recoded into two categories: Limited or no English fluency and Fluent in English. Observations with missing language information are excluded from the analysis.
+
+Each stop is converted into a series of binary indicators representing key enforcement outcomes. 
+- Arrests are defined as custodial arrests without a warrant (`ROS_CUSTODIAL_WITHOUT_WARRANT == 1`).
+- Citations are defined as in-field cite-and-release dispositions (`ROS_IN_FIELD_CITE_RELEASE == 1`). 
+- Searches are defined as any search of a person or property (`NFA_SEARCH_PERSON == 1` or `NFA_SEARCH_PROPERTY == 1`). 
+- Use of force is defined as any instance of handcuffing, physical compliance techniques, firearm pointing, or firearm discharge (`OFA_HANDCUFFED`, `OFA_PHYSICAL_COMPLIANCE`, `OFA_FIREARM_POINT`, or `OFA_FIREARM_DISCHARGE`). 
+- Stops resulting in no enforcement action are identified by `ROS_NO_ACTION == 1`.
+
+For each stop-reason category, stops are grouped by English proficiency. The analysis calculates the total number of stops, counts of each enforcement outcome, and corresponding rates (means of binary indicators) for each language group.
+
+To maintain statistical stability, language groups with fewer than 10 observations within a stop-reason category are excluded from the summary. Comparative tables are produced only when at least two groups meet this threshold. The resulting summaries provide descriptive measures of enforcement outcomes for individuals with differing English proficiency under comparable stop circumstances, allowing identification of potential disparities in law enforcement actions.
+
+```{r, results = 'asis'}
+for (i in 1:length(agency_name_list)) {
+  agency_name = agency_name_list[i]
+  
+  cat(paste0("\n\n### ", agency_name, "\n\n"))
+  
+  for (j in 1:dim(rfs_list)[1]) {
+    rfs = as.numeric(rfs_list[j,1])
+    
+    cat(paste0("\n\n#### ", rfs_list[j,2], "\n\n"))
+    
+    language_summary <- RIPA_MARIN_2024 |>
+      filter(REASON_FOR_STOP == rfs & AGENCY_NAME == agency_name) |>
+      mutate(
+        language = case_when(
+          LIMITED_ENGLISH_FLUENCY == 1 ~ "Limited or no English fluency",
+          LIMITED_ENGLISH_FLUENCY == 0 ~ "Fluent in English",
+          TRUE ~ NA_character_
+          ),
+        result_arrest = if_else(ROS_CUSTODIAL_WITHOUT_WARRANT == 1, 1, 0),
+        result_citation = if_else(ROS_IN_FIELD_CITE_RELEASE == 1, 1, 0),
+        searched = if_else(NFA_SEARCH_PERSON == 1 | NFA_SEARCH_PROPERTY == 1, 1, 0),
+        force_used = if_else(
+          OFA_HANDCUFFED == 1 | OFA_PHYSICAL_COMPLIANCE == 1 | OFA_FIREARM_POINT == 1 | 
+          OFA_FIREARM_DISCHARGE == 1, 1, 0),
+        no_action = if_else(ROS_NO_ACTION == 1, 1, 0)
+        ) |>
+      filter(!is.na(language)) |>
+      group_by(language) |>
+      summarise(
+        n = n(),
+        total_arrest = sum(result_arrest, na.rm = TRUE),
+        arrest_rate = mean(result_arrest, na.rm = TRUE),
+        total_citation = sum(result_citation, na.rm = TRUE),
+        citation_rate = mean(result_citation, na.rm = TRUE),
+        total_search = sum(searched, na.rm = TRUE),
+        search_rate = mean(searched, na.rm = TRUE),
+        total_force = sum(force_used, na.rm = TRUE),
+        force_rate = mean(force_used, na.rm = TRUE),
+        total_no_action = sum(no_action, na.rm = TRUE),
+        no_action_rate = mean(no_action, na.rm = TRUE),
+        .groups = "drop"
+        ) |>
+      filter(n >= 10)
+
+    if (nrow(language_summary) > 1) {
+      print(kable(language_summary))
+      } else{
+      print("Less than one sample has a size greater than 10, not signifiant enough to compare")
+    }  
+    cat("\n\n")
+  }
+}
+```
