@@ -1,0 +1,168 @@
+async function onApplePayButtonClicked() {
+
+    // Consider falling back to Apple Pay JS if Payment Request is not available.
+    if (!PaymentRequest) {
+        return;
+    }
+
+    try {
+
+        // Define PaymentMethodData
+        const paymentMethodData = [{
+            "supportedMethods": "https://apple.com/apple-pay",
+            "data": {
+                "version": 3,
+                "merchantIdentifier": "merchant.com.apdemo",
+                "merchantCapabilities": [
+                    "supports3DS"
+                ],
+                "supportedNetworks": [
+                    "amex",
+                    "discover",
+                    "masterCard",
+                    "visa"
+                ],
+                "countryCode": "US"
+            }
+        }];
+        // Define PaymentDetails
+        const paymentDetails = {
+            "total": {
+                "label": "Demo (Card is not charged)",
+                "amount": {
+                    "value": "27.50",
+                    "currency": "USD"
+                }
+            }
+        };
+        // Define PaymentOptions
+        const paymentOptions = {
+            "requestPayerName": false,
+            "requestBillingAddress": false,
+            "requestPayerEmail": false,
+            "requestPayerPhone": false,
+            "requestShipping": false,
+            "shippingType": "shipping"
+        };
+
+        // Create PaymentRequest
+        const request = new PaymentRequest(paymentMethodData, paymentDetails, paymentOptions);
+
+        request.onmerchantvalidation = event => {
+            // Call your own server to request a new merchant session.
+            const merchantSessionPromise = validateMerchant(event.validationURL);
+            event.complete(merchantSessionPromise);
+        };
+
+        request.onpaymentmethodchange = event => {
+            if (event.methodDetails.type !== undefined) {
+                // Find the matching modifier for the selected payment method type.
+                const modifier = paymentDetails.modifiers?.find(
+                    m => m.data?.paymentMethodType === event.methodDetails.type
+                );
+
+                if (modifier) {
+                    event.updateWith({
+                        total: modifier.total,
+                        displayItems: [],
+                        shippingOptions: paymentDetails.shippingOptions,
+                        modifiers: paymentDetails.modifiers,
+                    });
+                } else {
+                    event.updateWith({ total: paymentDetails.total, displayItems: [] });
+                }
+            } else if (event.methodDetails.couponCode !== undefined) {
+                // Define PaymentDetailsUpdate based on the coupon code.
+                const total = calculateTotal(event.methodDetails.couponCode);
+                const displayItems = calculateDisplayItem(event.methodDetails.couponCode);
+                const shippingOptions = calculateShippingOptions(event.methodDetails.couponCode);
+                const error = calculateError(event.methodDetails.couponCode);
+
+                event.updateWith({
+                    total: total,
+                    displayItems: displayItems,
+                    shippingOptions: shippingOptions,
+                    modifiers: [
+                        {
+                            data: {
+                                additionalShippingMethods: shippingOptions,
+                            },
+                        },
+                    ],
+                    error: error,
+                });
+            }
+        };
+
+        request.onshippingoptionchange = event => {
+            // Define PaymentDetailsUpdate based on the selected shipping option.
+            const paymentDetailsUpdate = {
+              total: paymentDetails.total,
+              displayItems: [],
+              shippingOptions: paymentDetails.shippingOptions,
+              modifiers: (paymentDetails.modifiers || []).map(mod => ({
+                ...mod,
+                additionalDisplayItems: [],
+              })),
+            };
+
+            if (request.shippingOption && paymentDetails.shippingOptions) {
+              const selectedShipping = paymentDetails.shippingOptions.find(o => o.id === request.shippingOption);
+
+              if (selectedShipping) {
+                const baseAmount = parseFloat(paymentDetails.total.amount.value);
+                const taxAmount = 2.50;
+                const shippingAmount = parseFloat(selectedShipping.amount.value);
+                const totalAmount = baseAmount + taxAmount + shippingAmount;
+
+                paymentDetailsUpdate.total = {
+                  ...paymentDetails.total,
+                  amount: {
+                    ...paymentDetails.total.amount,
+                    value: totalAmount.toFixed(2),
+                  },
+                };
+
+                paymentDetailsUpdate.displayItems = [
+                  { label: 'Tax', amount: { value: taxAmount.toFixed(2), currency: paymentDetails.total.amount.currency } },
+                  { label: selectedShipping.label, amount: selectedShipping.amount },
+                ];
+
+                paymentDetailsUpdate.shippingOptions = [
+                  selectedShipping,
+                  ...paymentDetails.shippingOptions.filter((o) => o.id !== selectedShipping.id),
+                ];
+              }
+            }
+
+            event.updateWith(paymentDetailsUpdate);
+        };
+
+        request.onshippingaddresschange = event => {
+            // Define PaymentDetailsUpdate based on a shipping address change.
+            const paymentDetailsUpdate = {};
+            event.updateWith(paymentDetailsUpdate);
+        };
+
+        const response = await request.show();
+
+        // Surface payerErrors and shippingAddressErrors via retry() - neither is
+        // reliably delivered through event.updateWith() on Apple Pay.
+        const paymentDetailsUpdate = {};
+        const validationErrors = {};
+        if (paymentDetailsUpdate?.payerErrors) {
+            validationErrors.payer = paymentDetailsUpdate.payerErrors;
+        }
+        if (paymentDetailsUpdate?.shippingAddressErrors) {
+            validationErrors.shippingAddress = paymentDetailsUpdate.shippingAddressErrors;
+        }
+        if (Object.keys(validationErrors).length > 0) {
+            await response.retry(validationErrors);
+        }
+
+        const status = "success";
+        await response.complete(status);
+    } catch (e) {
+        // Handle errors
+    }
+}
